@@ -1,0 +1,169 @@
+# run kubectl apply -f bus-telemetry.yaml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sat-bus
+---
+# Tiny Python app that emits housekeeping metrics
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bus-telemetry-app
+  namespace: sat-bus
+data:
+  telemetry.py: |
+    from prometheus_client import start_http_server, Gauge, Enum
+    import random, time
+
+    # Gauges = our "analog needles"
+    bus_voltage = Gauge('bus_supply_voltage_volts', 'Main bus voltage (V)')
+    battery_soc = Gauge('bus_battery_soc_percent', 'Battery state of charge (%)')
+    imu_temp    = Gauge('bus_imu_temp_celsius', 'IMU temperature (C)')
+    heartbeat   = Gauge('bus_last_heartbeat_unixtime', 'Last heartbeat time (s)')
+    mode        = Enum('bus_mode', 'Current bus mode', states=['idle','safe','nominal','highrate'])
+
+    # Start the HTTP /metrics server
+    start_http_server(8000)
+
+    # Simulated values (simple random walk)
+    v, soc, temp = 7.5, 100.0, 22.0
+    tick = 0
+    while True:
+        v   += random.uniform(-0.02, 0.01)
+        soc -= 0.05 if mode._value.get() != 'highrate' else 0.1
+        temp+= random.uniform(-0.1, 0.1)
+        if tick % 60 == 0:  # change mode once a minute
+            mode.state(random.choice(['idle','nominal','highrate','safe']))
+        # clamp to sensible bounds
+        v   = max(5.0, min(9.0, v))
+        soc = max(0.0, min(100.0, soc))
+
+        bus_voltage.set(v)
+        battery_soc.set(soc)
+        imu_temp.set(temp)
+        heartbeat.set(time.time())
+
+        time.sleep(1)
+        tick += 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bus-telemetry
+  namespace: sat-bus
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: bus-telemetry }
+  template:
+    metadata:
+      labels: { app: bus-telemetry }
+    spec:
+      containers:
+        - name: app
+          image: python:3.11-alpine
+          ports: [{ containerPort: 8000, name: metrics }]
+          command: ["/bin/sh","-lc"]
+          args:
+            - |
+              python -m pip install --no-cache-dir prometheus_client==0.20.0
+              python /app/telemetry.py
+          volumeMounts:
+            - name: code
+              mountPath: /app
+          readinessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /metrics, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: code
+          configMap:
+            name: bus-telemetry-app
+            defaultMode: 0444
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bus-telemetry
+  namespace: sat-bus
+  labels: { app: bus-telemetry }
+spec:
+  selector: { app: bus-telemetry }
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: metrics
+---
+# Tell Prometheus Operator to scrape this Service
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bus-telemetry
+  namespace: sat-bus
+  labels:
+    release: kps     # <-- match your kube-prometheus-stack release name (often 'kps' or 'prom')
+spec:
+  selector:
+    matchLabels:
+      app: bus-telemetry
+  namespaceSelector:
+    matchNames: ["sat-bus"]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+---
+# Simple safety nets: low voltage, high temp, no heartbeat
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: bus-telemetry-rules
+  namespace: sat-bus
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: bus.housekeeping
+      rules:
+        - alert: BusLowVoltage
+          expr: bus_supply_voltage_volts < 6.0
+          for: 2m
+          labels: { severity: warning }
+          annotations:
+            summary: "Bus voltage is low"
+            description: "Voltage {{ $value }} V < 6.0 V on {{ $labels.instance }}"
+        - alert: BusHighTemp
+          expr: bus_imu_temp_celsius > 60
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "IMU temperature high"
+            description: "Temperature {{ $value }} °C > 60 °C on {{ $labels.instance }}"
+        - alert: BusNoTelemetry
+          expr: time() - bus_last_heartbeat_unixtime > 120
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "No telemetry reported"
+            description: "No heartbeat for > 2 minutes from {{ $labels.instance }}"
+---
+# (Optional) Lock down scraping to Prometheus only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: sat-bus
+spec:
+  podSelector: { matchLabels: { app: bus-telemetry } }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+      ports:
+        - port: 8000
