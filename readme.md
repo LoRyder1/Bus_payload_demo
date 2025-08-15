@@ -78,3 +78,4 @@ kubectl -n monitoring port-forward svc/kps-grafana 3000:80
 #   - Time series: bus_imu_temp_celsius
 #   - Stat: histogram_quantile(0.5, sum(rate(prometheus_http_request_duration_seconds_bucket[5m])) by (le))  (just to see queries work)
 ```
+
