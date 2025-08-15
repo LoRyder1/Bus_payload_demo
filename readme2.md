@@ -47,3 +47,43 @@
 	- Exploration
 	- Team visibility
 	
+## what you have
+
+1. Cluster - 1 control plane, 1 worker
+	- containerd, kubeadm, init/join, CNI, CoreDNS healthy
+2. Observability
+	- kube-prometheus-stack - prometheus, alertmanager, Grafana, node-exporter, kube-state-metrics
+3. Workload
+	- a tiny bus-telemetry exporter HTTP /metrics + Service + ServiceMonitor + alert rules
+	
+
+## Overview of Kubernetes
+1. Control Plane
+	- API Server
+	- Scheduler
+	- Controller Manager
+	- etcd
+2. Worker Node
+	- Kubelet
+	- Kube-proxy
+	- Container Runtime
+
+## Key Kubernetes Objects
+1. Pod
+2. Deployment
+3. Service
+4. ConfigMap & Secret
+5. Ingress
+6. Namespace
+
+## Networking in Kubernetes
+1. Pod to Pod communication
+2. Service to Pod routing
+3. Ingress
+
+## Cluster Lifecycle
+1. Provisioning
+2. Deploying Applications
+3. Scaling
+4. Upgrading and Maintenance
+
