@@ -65,7 +65,7 @@
 
 bash:
 
-\```bash
+```bash
 # Prometheus UI (optional)
 kubectl -n monitoring port-forward svc/kps-prometheus 9090:9090
 # -> open http://localhost:9090 and query: bus_supply_voltage_volts
@@ -77,4 +77,4 @@ kubectl -n monitoring port-forward svc/kps-grafana 3000:80
 #   - Gauge: bus_battery_soc_percent
 #   - Time series: bus_imu_temp_celsius
 #   - Stat: histogram_quantile(0.5, sum(rate(prometheus_http_request_duration_seconds_bucket[5m])) by (le))  (just to see queries work)
-\```
+```
